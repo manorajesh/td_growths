@@ -295,3 +295,19 @@ from the top-left, at 1:1 pixels. The defaults are left at x 160, right at x 0, 
 `{ "ndi": { "networks": { "ips": "<left-ip>,<right-ip>", "discovery": "" }, "tcp": { "recv": { "enable": true } },
 "rudp": { "recv": { "enable": false } }, "unicast": { "recv": { "enable": false } }, "multicast": { "recv": { "enable": false } } } }`
 Then fully restart TouchDesigner. A wired network (one small switch) is more reliable.
+
+## Remapping file paths (`remap_paths.py`)
+
+This is for patches made on Windows or another Mac. Open the patch, run
+`import os; exec(open(os.path.expanduser('~/code/td_silhouette/remap_paths.py')).read())`, then Save As.
+- **What it fixes:** every file parameter that doesn't exist here (`D:/…`, `C:\…`, another user's `/Users/…`) is
+  relinked to the same-named file in `<toe folder>/assets`, the `.toe`'s folder or `~/Downloads/assets`, relative to
+  the `.toe`.
+- **External `.tox` links:** cleared by default, so the networks saved inside the `.toe` are kept. Set
+  `RELINK_TOX = True` first to link the local `.tox` files instead.
+- **Report only:** `REMAP_DRY_RUN = True` lists the changes without making them.
+
+**Key toggle** (`add_spores_keytoggle.py`, after `add_spores_switch.py`): a **Local Key** (default `e`) toggles
+**Enabled** on that machine while TouchDesigner is focused. **Touch In** toggles it from another TouchDesigner: on the
+controller, wire Keyboard In CHOP (Keys `e`) to Touch Out CHOP (Port 9000). On each side, turn on **Touch In** and set
+**Touch In Address** to the controller's IP. Any incoming channel going 0 → 1 toggles.
