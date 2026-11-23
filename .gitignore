@@ -1,0 +1,8 @@
+# machine-specific helper environment (recreate with setup_mac.sh)
+helper/.venv/
+__pycache__/
+*.pyc
+.DS_Store
+# TouchDesigner backups / autosaves
+Backup/
+*.toe.dir/
