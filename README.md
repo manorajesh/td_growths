@@ -248,3 +248,50 @@ helper/.venv/bin/python helper/camctl.py reset                      # factory de
 - Keep `low_light=off` so the frame rate never drops.
 - Each camera is listed with the same camera ID the TouchDesigner camera menus use, so two C922s can be told apart.
 - Cameras keep these settings until they lose power. Run `load` after replugging or at boot.
+
+## Spores on/off over OSC (`add_spores_switch.py`)
+
+`import os; exec(open(os.path.expanduser('~/code/td_silhouette/add_spores_switch.py')).read())` adds an **Enable**
+page to `/project1/spores`, keeping your settings. New builds include it.
+- **Enabled on:** growth starts fresh on whoever is there and the output fades up.
+- **Enabled off:** the silhouette is ignored, so the mold withers, and the output fades to black over **Fade Time**.
+- **OSC:** listens on **OSC Port** (7000) at **OSC Address** (`/growth/enable`). `<address>/on`, `/off` and `/toggle`
+  always work.
+
+| OSC Mode | Behaviour |
+|---|---|
+| Pulse or hold turns on (default) | A pulse (a short 1 then 0, or a message with no value) turns it on and it stays on. A 1 held longer than **Pulse Length** keeps it on, and returning to 0 turns it off. |
+| Follow the value | On while the last value is above 0. |
+| Each pulse toggles | Every pulse flips it. |
+| Any message turns on | Any message turns it on; use `/off` to turn it off. |
+
+**Test:** `python3 helper/osc_send.py /growth/enable 1 --pulse 0.2`. Add `--host <ip>` from another machine.
+
+## Three-MacBook setup: one MacBook per side + one driving the LEDs
+
+**Each side's MacBook** (with that side's camera):
+```python
+SIDE = 'L'; import os; exec(open(os.path.expanduser('~/code/td_silhouette/build_side.py')).read())   # left MacBook
+SIDE = 'R'; import os; exec(open(os.path.expanduser('~/code/td_silhouette/build_side.py')).read())   # right MacBook
+```
+This builds only that side:
+- **`silhouette_wall`:** camera, segmentation and warp, with `calibrate_ui` for that side.
+- **`spores`:** the growth, with the OSC on/off switch.
+- **NDI:** `silhouette_wall/ndi_out` sends that side's 160×320 LED image as **Growth Side L** / **Growth Side R**.
+
+**Calibration View** on the side shows its calibration through the same stream.
+
+**LED MacBook** (cabled to the Absen):
+`import os; exec(open(os.path.expanduser('~/code/td_silhouette/receiver_setup.py')).read())` builds
+`/project1/led_receiver`. `ndi_L` + `ndi_R` feed `canvas`: a black 1024×768 canvas with each side placed at its offset
+from the top-left, at 1:1 pixels. The defaults are left at x 160, right at x 0, both at y 0.
+- The NDI sources are picked automatically once they appear. You can also choose them in each NDI In TOP.
+- **Panel Test Pattern** (red = left, blue = right, 1–8 dots per panel, green = top-left of each side). Use it with
+  **Left/Right X/Y** to match the physical panels.
+- Set **Monitor Index** to the Absen display, then **Open Window**. The display must be exactly 1024×768, unscaled, with
+  no menu bar on it.
+
+**NDI over campus Wi-Fi:** in `~/.ndi/ndi-config.v1.json` on the LED MacBook, list both senders' IPs:
+`{ "ndi": { "networks": { "ips": "<left-ip>,<right-ip>", "discovery": "" }, "tcp": { "recv": { "enable": true } },
+"rudp": { "recv": { "enable": false } }, "unicast": { "recv": { "enable": false } }, "multicast": { "recv": { "enable": false } } } }`
+Then fully restart TouchDesigner. A wired network (one small switch) is more reliable.

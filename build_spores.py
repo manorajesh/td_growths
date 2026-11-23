@@ -510,16 +510,24 @@ def build():
 	pe.par.op.expr = 'parent()'
 	try_set(pe, pars='Reset', custom=True, builtin=False, valuechange=False, onpulse=True)
 	pe.text = RESET
-	left = build_side(c, 'L', 3.0)
-	right = build_side(c, 'R', 7.0)
+	sides = tuple(globals().get('SIDES', ('L', 'R')))      # ('L',) / ('R',): one side per MacBook
+	left = build_side(c, 'L', 3.0) if 'L' in sides else None
+	right = build_side(c, 'R', 7.0) if 'R' in sides else None
 	sp = c.create(executeDAT, 'seedpicker')
 	sp.text = SEEDPICKER
 	try_set(sp, framestart=True)
 	place(sp, 1, 3)
-	place(left, 0, 0)
-	place(right, 0, 2)
+	for o, y in ((left, 0), (right, 2)):
+		if o is not None:
+			place(o, 0, y)
 	place(pe, 1, 1)
 	wire_to_wall(c)
+	# OSC on/off switch (Enable page) -- same code as add_spores_switch.py
+	ns = {'__name__': 'spores_build'}
+	ns.update({k: globals()[k] for k in ('op', 'root', 'textDAT', 'oscinDAT', 'constantCHOP', 'lagCHOP', 'levelTOP')
+	           if k in globals()})
+	exec(open(os.path.join(ROOT_DIR, 'add_spores_switch.py')).read(), ns)
+	ns['add_spores_switch'](c)
 	print('spores: built {} (source: {})'.format(c.path, c.par.Source.eval()))
 	return c
 

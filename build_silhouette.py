@@ -595,6 +595,43 @@ def add_ndi(wall, out, pg):
 	return ns['add_ndi'](wall)
 
 
+SIDE_NDI_NOTE = '''This MacBook drives ONE side.  ndi_out sends that side's LED image (display_X:
+the spores / your effect, or the calibration view) -- the receiving MacBook places it on the panels
+(receiver_setup.py), where the panel test pattern and offsets now live.'''
+
+
+def finish_single_side(wall, pg, side_tag, nulls, display, cameras):
+	side, tag = side_tag
+	out = wall.create(nullTOP, 'out_side')
+	display.outputConnectors[0].connect(out)
+	p = pg.appendToggle('Ndienable', label='NDI Output')[0]
+	p.default = p.val = True
+	p = pg.appendStr('Ndiname', label='NDI Source Name')[0]
+	p.default = p.val = 'Growth Side ' + tag
+	ndi = wall.create(ndioutTOP, 'ndi_out')
+	out.outputConnectors[0].connect(ndi)
+	ndi.par.active.expr = 'parent().par.Ndienable'
+	try:
+		ndi.par.name.expr = 'parent().par.Ndiname'
+	except Exception as e:
+		print('silhouette_wall: could not set ndi_out.name ({})'.format(e))
+	try_set(ndi, includealpha=False)
+	note = wall.create(textDAT, 'README_side')
+	note.text = SIDE_NDI_NOTE
+	ex = wall.create(executeDAT, 'helpers')
+	ex.text = WALL_EXEC
+	try_set(ex, start=True, framestart=True, exit=True)
+	for j, nm in enumerate(('silhouette_', 'silhouette_hi_', 'camera_', 'calib_')):
+		place(nulls[nm + tag], 1, j)
+	for o, x, y in ((side, 0, 0), (display, 3, 0), (out, 4, 0), (ndi, 5, 0), (note, 3, 2), (ex, 4, 2)):
+		place(o, x, y)
+	side.op('pulses').module.sync_helper(side)
+	print('silhouette_wall: built ONE side ({}) {}  (cameras: {}, NDI source "{}", {}x{})'.format(
+		tag, wall.path, [n for u, n in cameras], wall.par.Ndiname.eval(),
+		side.par.Ledw.eval(), side.par.Ledh.eval()))
+	return wall
+
+
 # --------------------------------------------------------------------------- wall
 def build():
 	host = op('/project1') or root
@@ -609,6 +646,9 @@ def build():
 	# also stop any helper left over from an earlier session (they hold the cameras)
 	subprocess.run(['pkill', '-f', 'vision_segment.py .*--file /tmp/silhouette_'], capture_output=True)
 	wall = host.create(baseCOMP, 'silhouette_wall')
+	# SIDES = ('L',) or ('R',) builds one side for its own MacBook (see build_side.py); default both
+	sides = tuple(globals().get('SIDES', ('L', 'R')))
+	single = len(sides) == 1
 
 	pg = wall.appendCustomPage('Output')
 	add_toggle(pg, 'Testpattern', 'Panel Test Pattern')
@@ -628,15 +668,16 @@ def build():
 	p.default = p.val = portable(ROOT_DIR)
 
 	cameras = list_cameras()
-	left = build_side(wall, 'side_L', cameras, cameras[0][0])
-	right = build_side(wall, 'side_R', cameras, cameras[1 % len(cameras)][0])
+	left = build_side(wall, 'side_L', cameras, cameras[0][0]) if 'L' in sides else None
+	right = build_side(wall, 'side_R', cameras, cameras[(0 if single else 1) % len(cameras)][0]) if 'R' in sides else None
+	built = [(sd, tg) for sd, tg in ((left, 'L'), (right, 'R')) if sd is not None]
 	exec(open(os.path.join(ROOT_DIR, 'phone_input.py')).read(), globals())
-	for side, tag in ((left, 'silhouette_L'), (right, 'silhouette_R')):
-		add_phone_input(side, 'Visioncamera', tag)       # 'Phone (VDO.Ninja URL)' camera option
+	for side, tag in built:
+		add_phone_input(side, 'Visioncamera', 'silhouette_' + tag)   # 'Phone (VDO.Ninja URL)' camera option
 
 	# Clean, named outputs for your effects network (reference these, e.g. op('.../silhouette_L')).
 	nulls = {}
-	for side, tag in ((left, 'L'), (right, 'R')):
+	for side, tag in built:
 		for idx, nm in ((1, 'silhouette_' + tag), (2, 'silhouette_hi_' + tag), (3, 'camera_' + tag),
 		                (4, 'calib_' + tag)):
 			n = wall.create(selectTOP, nm)       # selects side_X/outN by name (robust to wiring order)
@@ -645,12 +686,15 @@ def build():
 	# What each side shows on the wall.  Input 0 = what normally goes to the LEDs: wire your
 	# vine effect in here (defaults to the plain silhouette).  Input 1 = calibration view.
 	displays = []
-	for side, tag in ((left, 'L'), (right, 'R')):
+	for side, tag in built:
 		d = wall.create(switchTOP, 'display_' + tag)
 		nulls['silhouette_' + tag].outputConnectors[0].connect(d.inputConnectors[0])
 		nulls['calib_' + tag].outputConnectors[0].connect(d.inputConnectors[1])
 		d.par.index.expr = "int(op('{}').par.Calibrate.eval())".format(side.name)
 		displays.append(d)
+
+	if single:
+		return finish_single_side(wall, pg, built[0], nulls, displays[0], cameras)
 
 	load_shader(wall, 'compose')
 	comp = glsl(wall, 'compose', 'compose', inputs=displays, w=E('Canvasw'), h=E('Canvash'),
