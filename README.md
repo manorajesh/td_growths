@@ -215,3 +215,36 @@ count), Trail (decay, diffuse, deposit), Look (gain, crispness, haze, sparks, co
 - Shorter **Sensor Distance** with faster **Decay** gives a finer network.
 - More **Flow** gives dripping streams.
 - Use **Agents** = 512×512 if the frame rate drops.
+
+## Webcam hardware controls (`helper/camctl.py`)
+
+**Control page:** `helper/.venv/bin/python helper/camctl_web.py` opens `http://127.0.0.1:8765` in the browser. It has
+a camera picker, a live preview, switches for the auto modes, sliders for exposure (ms, log scale), gain, white
+balance, focus and so on, and Save / Load preset and Reset buttons. Presets go to `camera_presets.json`. The page is
+served on this Mac only. Double-click a slider to return it to the default.
+
+The command-line equivalent:
+
+This sets exposure and similar controls inside the C920/C922 (or any UVC webcam) over USB. It's a real camera setting,
+not a post effect, and it works while TouchDesigner is using the camera, with no root or drivers.
+
+```sh
+cd ~/code/td_silhouette
+helper/.venv/bin/python helper/camctl.py list                     # cameras + their macOS camera IDs
+helper/.venv/bin/python helper/camctl.py show                     # every control: current, range, default
+helper/.venv/bin/python helper/camctl.py set exposure_ms=10 gain=40 wb=4500 focus=0
+helper/.venv/bin/python helper/camctl.py set -c 1 auto_exposure=on  # one camera (index, camera ID or name)
+helper/.venv/bin/python helper/camctl.py save show.json             # store the tuned settings
+helper/.venv/bin/python helper/camctl.py load show.json             # re-apply after a replug / reboot
+helper/.venv/bin/python helper/camctl.py reset                      # factory defaults, auto modes on
+```
+
+**Controls:** `auto_exposure`, `exposure_ms` (C922: 0.3–204.7 ms), `low_light`, `gain` (0–255), `brightness`,
+`contrast`, `saturation`, `sharpness`, `wb_auto`, `wb` (2000–6500 K), `focus_auto`, `focus` (0–250), `zoom`,
+`backlight`, `powerline`.
+- Setting `exposure_ms`, `wb` or `focus` switches that control's auto mode off.
+- For the installation, lock exposure and white balance so the image doesn't pump as people move: set `exposure_ms` to
+  about 8–16, raise `gain` until bright enough, then save.
+- Keep `low_light=off` so the frame rate never drops.
+- Each camera is listed with the same camera ID the TouchDesigner camera menus use, so two C922s can be told apart.
+- Cameras keep these settings until they lose power. Run `load` after replugging or at boot.

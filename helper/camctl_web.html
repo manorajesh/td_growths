@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Controls</title>
+<style>
+	:root {
+		--bg: #0e1110; --panel: #171b1a; --line: #262c2a; --text: #e6ece9; --muted: #8b9893;
+		--accent: #5fe0a0; --accent-dim: #2b6b4c; --warn: #f0a35e;
+	}
+	* { box-sizing: border-box; }
+	body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+	header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+	h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+	select, button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; }
+	button { cursor: pointer; }
+	button:hover { border-color: var(--accent-dim); }
+	button.primary { border-color: var(--accent-dim); color: var(--accent); }
+	.spacer { flex: 1; }
+	.status { color: var(--muted); font-size: 12px; min-width: 160px; text-align: right; }
+	.status.err { color: var(--warn); }
+	main { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(300px, 1fr); gap: 18px; padding: 18px; }
+	@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+	.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+	.preview { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; }
+	video { width: 100%; height: 100%; object-fit: contain; display: block; }
+	.preview .hint { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 20px; }
+	.row2 { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+	.group { margin-bottom: 14px; }
+	.group h2 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+	.ctl { display: grid; grid-template-columns: 110px minmax(0, 1fr) 76px; gap: 10px; align-items: center; padding: 5px 0; }
+	.ctl label { color: var(--text); }
+	.ctl .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+	.ctl.disabled label, .ctl.disabled .val { opacity: .45; }
+	input[type=range] { width: 100%; accent-color: var(--accent); }
+	input[type=range]:disabled { opacity: .35; }
+	.switch { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
+	.toggle { position: relative; width: 40px; height: 22px; flex: none; }
+	.toggle input { opacity: 0; width: 0; height: 0; }
+	.toggle span { position: absolute; inset: 0; background: var(--line); border-radius: 22px; transition: .15s; cursor: pointer; }
+	.toggle span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: var(--muted); border-radius: 50%; transition: .15s; }
+	.toggle input:checked + span { background: var(--accent-dim); }
+	.toggle input:checked + span::before { transform: translateX(18px); background: var(--accent); }
+	.note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+	<h1>Camera Controls</h1>
+	<select id="cam" title="Camera to control"></select>
+	<button id="refresh" title="Re-scan USB cameras">Rescan</button>
+	<span class="spacer"></span>
+	<button id="save" class="primary" title="Save all cameras' settings to camera_presets.json">Save preset</button>
+	<button id="load" title="Apply camera_presets.json">Load preset</button>
+	<button id="reset" title="Factory defaults, auto modes on">Reset to defaults</button>
+	<span id="status" class="status"></span>
+</header>
+<main>
+	<section class="card">
+		<div class="preview">
+			<video id="video" autoplay muted playsinline></video>
+			<div class="hint" id="hint">Allow camera access to see the preview.</div>
+		</div>
+		<div class="row2">
+			<span>Preview</span>
+			<select id="dev" title="Preview device (pick the same physical camera)"></select>
+			<span id="res"></span>
+		</div>
+		<div class="note">The preview opens the camera in this browser too. TouchDesigner keeps working, and settings changed here apply to both.</div>
+	</section>
+	<section class="card" id="controls"></section>
+</main>
+<script>
+"use strict";
+const LAYOUT = [
+	{ title: "Exposure", items: ["auto_exposure", "exposure", "gain", "low_light", "backlight"] },
+	{ title: "Color", items: ["wb_auto", "wb", "saturation", "brightness", "contrast"] },
+	{ title: "Lens", items: ["focus_auto", "focus", "zoom", "sharpness"] },
+	{ title: "Flicker", items: ["powerline"] },
+];
+const LABELS = {
+	auto_exposure: "Auto exposure", exposure: "Exposure", gain: "Gain", low_light: "Low-light fps drop",
+	backlight: "Backlight comp.", wb_auto: "Auto white bal.", wb: "White balance", saturation: "Saturation",
+	brightness: "Brightness", contrast: "Contrast", focus_auto: "Autofocus", focus: "Focus", zoom: "Zoom",
+	sharpness: "Sharpness", powerline: "Power line",
+};
+const SWITCHES = new Set(["auto_exposure", "wb_auto", "focus_auto", "low_light"]);
+const AUTO_FOR = { exposure: "auto_exposure", wb: "wb_auto", focus: "focus_auto" };
+let cams = [], current = null, inflight = 0, pending = new Map();
+
+const $ = (id) => document.getElementById(id);
+function status(msg, err) { const s = $("status"); s.textContent = msg; s.className = "status" + (err ? " err" : ""); }
+
+async function api(path, body) {
+	const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+	const j = await r.json();
+	if (!r.ok) throw new Error(j.error || r.statusText);
+	return j;
+}
+
+// exposure is shown in ms on a log slider (0.3 ms .. 205 ms spans three decades)
+const expToSlider = (v, c) => Math.round(1000 * Math.log(v / c.min) / Math.log(c.max / c.min));
+const sliderToExp = (x, c) => Math.round(c.min * Math.pow(c.max / c.min, x / 1000));
+function fmt(name, v) {
+	if (name === "exposure") return (v / 10).toFixed(v < 100 ? 1 : 0) + " ms";
+	if (name === "wb") return v + " K";
+	if (name === "zoom") return (v / 100).toFixed(1) + "x";
+	return String(v);
+}
+
+function render() {
+	const box = $("controls");
+	box.innerHTML = "";
+	if (!current) { box.textContent = "No UVC camera found."; return; }
+	const ctrls = current.controls;
+	for (const g of LAYOUT) {
+		const items = g.items.filter((n) => n in ctrls);
+		if (!items.length) continue;
+		const sec = document.createElement("div");
+		sec.className = "group";
+		sec.innerHTML = `<h2>${g.title}</h2>`;
+		for (const n of items) sec.appendChild(control(n, ctrls[n]));
+		box.appendChild(sec);
+	}
+}
+
+function control(name, c) {
+	if (SWITCHES.has(name)) {
+		const row = document.createElement("div");
+		row.className = "switch";
+		row.innerHTML = `<label for="c_${name}">${LABELS[name]}</label><label class="toggle"><input type="checkbox" id="c_${name}"><span></span></label>`;
+		const cb = row.querySelector("input");
+		cb.checked = !!c.cur;
+		cb.addEventListener("change", () => send(name, cb.checked));
+		return row;
+	}
+	if (name === "powerline") {
+		const row = document.createElement("div");
+		row.className = "ctl";
+		row.innerHTML = `<label>${LABELS[name]}</label><select><option value="0">Off</option><option value="1">50 Hz</option><option value="2">60 Hz</option></select><span></span>`;
+		const sel = row.querySelector("select");
+		sel.value = String(c.cur);
+		sel.addEventListener("change", () => send(name, sel.value));
+		return row;
+	}
+	const row = document.createElement("div");
+	row.className = "ctl";
+	row.innerHTML = `<label for="c_${name}">${LABELS[name]}</label><input type="range" id="c_${name}"><span class="val"></span>`;
+	const sl = row.querySelector("input"), val = row.querySelector(".val");
+	const isExp = name === "exposure";
+	sl.min = isExp ? 0 : c.min; sl.max = isExp ? 1000 : c.max; sl.step = 1;
+	sl.value = isExp ? expToSlider(c.cur, c) : c.cur;
+	val.textContent = fmt(name, c.cur);
+	const auto = AUTO_FOR[name];
+	if (auto && current.controls[auto] && current.controls[auto].cur) {
+		row.classList.add("disabled");
+		sl.title = `${LABELS[auto]} is on. Move the slider to switch to manual.`;
+	}
+	sl.addEventListener("input", () => {
+		const v = isExp ? sliderToExp(+sl.value, c) : +sl.value;
+		val.textContent = fmt(name, v);
+		row.classList.remove("disabled");
+		send(name, v);
+	});
+	sl.addEventListener("dblclick", () => {                  // double-click: back to default
+		if (c.def === undefined) return;
+		sl.value = isExp ? expToSlider(c.def, c) : c.def;
+		val.textContent = fmt(name, c.def);
+		send(name, c.def);
+	});
+	return row;
+}
+
+// coalesce rapid slider moves: at most one request in flight per control
+function send(name, value) {
+	pending.set(name, value);
+	if (inflight) return;
+	flush();
+}
+async function flush() {
+	if (!pending.size || !current) return;
+	const [name, value] = pending.entries().next().value;
+	pending.delete(name);
+	inflight++;
+	try {
+		const st = await api("/api/set", { id: current.id, name, value });
+		const touched = name === "auto_exposure" || name === "wb_auto" || name === "focus_auto" ||
+			(name in AUTO_FOR && current.controls[AUTO_FOR[name]] && current.controls[AUTO_FOR[name]].cur);
+		current.controls = st.controls;
+		if (touched) render();                              // auto mode changed: refresh enabled states
+		status(`${LABELS[name]} set`);
+	} catch (e) {
+		status(e.message, true);
+	} finally {
+		inflight--;
+		if (pending.size) flush();
+	}
+}
+
+async function loadCams(keepId) {
+	try {
+		const j = await api("/api/cameras");
+		cams = j.cameras;
+		const sel = $("cam");
+		sel.innerHTML = cams.map((c, i) => `<option value="${c.id}">${i}: ${c.name} (${c.id})</option>`).join("");
+		current = cams.find((c) => c.id === keepId) || cams[0] || null;
+		if (current) sel.value = current.id;
+		render();
+		status(cams.length ? `${cams.length} camera${cams.length > 1 ? "s" : ""}` : "no cameras", !cams.length);
+		pickPreview();
+	} catch (e) {
+		status("server not reachable: " + e.message, true);
+	}
+}
+
+// ---- preview
+let stream = null;
+async function listDevices() {
+	try {
+		const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
+		tmp.getTracks().forEach((t) => t.stop());
+	} catch (e) {
+		$("hint").textContent = "Camera access was blocked. Allow it in the browser to see the preview.";
+		return [];
+	}
+	return (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+}
+async function pickPreview() {
+	const devs = await listDevices();
+	const sel = $("dev");
+	const prev = sel.value;
+	sel.innerHTML = devs.map((d) => `<option value="${d.deviceId}">${d.label || "camera"}</option>`).join("");
+	if (!devs.length) return;
+	const byName = current && devs.find((d) => d.label.toLowerCase().includes(current.name.split(" ")[0].toLowerCase()));
+	sel.value = devs.some((d) => d.deviceId === prev) ? prev : (byName ? byName.deviceId : devs[0].deviceId);
+	startPreview(sel.value);
+}
+async function startPreview(deviceId) {
+	if (stream) stream.getTracks().forEach((t) => t.stop());
+	try {
+		stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+		$("video").srcObject = stream;
+		$("hint").style.display = "none";
+		const s = stream.getVideoTracks()[0].getSettings();
+		$("res").textContent = s.width ? `${s.width}x${s.height}${s.frameRate ? " @ " + Math.round(s.frameRate) + " fps" : ""}` : "";
+	} catch (e) {
+		$("hint").style.display = "grid";
+		$("hint").textContent = "Preview unavailable: " + e.message;
+	}
+}
+
+$("cam").addEventListener("change", (e) => { current = cams.find((c) => c.id === e.target.value); render(); pickPreview(); });
+$("dev").addEventListener("change", (e) => startPreview(e.target.value));
+$("refresh").addEventListener("click", () => loadCams(current && current.id));
+$("reset").addEventListener("click", async () => {
+	if (!current) return;
+	try { const st = await api("/api/reset", { id: current.id }); current.controls = st.controls; render(); status("defaults restored"); }
+	catch (e) { status(e.message, true); }
+});
+$("save").addEventListener("click", async () => {
+	try { const j = await api("/api/save", {}); status("saved to " + j.saved.split("/").slice(-1)[0]); }
+	catch (e) { status(e.message, true); }
+});
+$("load").addEventListener("click", async () => {
+	try { await api("/api/load", {}); await loadCams(current && current.id); status("preset applied"); }
+	catch (e) { status(e.message, true); }
+});
+loadCams();
+</script>
+</body>
+</html>

@@ -6,3 +6,4 @@ __pycache__/
 # TouchDesigner backups / autosaves
 Backup/
 *.toe.dir/
+camera_presets.json
